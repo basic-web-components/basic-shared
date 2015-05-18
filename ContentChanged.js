@@ -51,10 +51,10 @@ function expandContentElements(nodes, includeTextNodes) {
 }
 
 
-// Invoke an element's contentChanged handler -- but first, see if the elements'
-// new content includes a content element, in which case we'll need to monitor
-// the component's host for changes, too.
-function handleContentChanged(mutations) {
+//
+// Respond to a mutation on an observed element.
+//
+function mutationObserved(mutations) {
 
   // TODO: Decide whether we want to treat attribute changes as content changes.
   // Special case: attribute mutations on the element itself aren't considered
@@ -70,21 +70,43 @@ function handleContentChanged(mutations) {
   //   }
   // }
 
-  // Filter out mutations which occurred in Shady DOM.
-  if (mutations) {
-    var mutationsInLightDom = mutations.filter(function(mutation) {
-      return isLightDomMutation(mutation, this);
-    }.bind(this));
-    if (mutationsInLightDom.length === 0) {
-      // All mutations were only modifications in Shady DOM.
-      return;
-    }
+  // See if the mutation actually occurred in light DOM.
+  // If we're using native Shadow DOM, the mutations must have occurred in light
+  // DOM; we wouldn't hear about mutations in shadow DOM. For Shady DOM, we need
+  // to apply our own heuristics to determine whether mutations were in the
+  // simulated light DOM.
+  var mutationsInLightDom = Polymer.Settings.useNativeShadow ||
+    includesLightDomMutations(mutations, this);
+
+  if (!mutationsInLightDom) {
+    // Nothing to handle as a change in content.
+    return;
   }
 
+  // See if the elements' new content includes a content element, in which case
+  // we'll need to monitor the component's host for changes, too.
   observeHostIfContentElementPresent(this);
 
   // Invoke the element's own handler.
-  this.contentChanged();
+  this._contentChangeHandler();
+}
+
+
+//
+// Return true if the given mutations include at least one mutation in the
+// component's light DOM.
+//
+function includesLightDomMutations(mutations, component) {
+
+  if (!mutations) {
+    // Assume there was a light DOM mutation.
+    return true;
+  }
+
+  // Look for at least one light DOM mutation DOM.
+  return mutations.some(function(mutation) {
+    return isLightDomMutation(mutation, component);
+  });
 }
 
 
@@ -142,8 +164,7 @@ function observeHostIfContentElementPresent(node) {
     var host = Basic.ContentHelpers.getHost(node);
     if (host) {
       observeContentMutations(host, function() {
-        var foo = host;
-        node.contentChanged();
+        node._contentChangeHandler();
       });
       observeHostIfContentElementPresent(host);
     }
@@ -177,20 +198,6 @@ window.Basic.ContentHelpers = {
   flattenChildNodes: function(node) {
     var childNodes = Polymer.dom(node).childNodes;
     return expandContentElements(childNodes, true);
-  },
-
-  /*
-   * Removes nodes distributed to <content></content>
-   */
-  removeLightDomNodes: function(node) {
-    var content = Polymer.dom(node.root).querySelector('content');
-    var distributedNodes = Polymer.dom(content).getDistributedNodes();
-    if (!distributedNodes) {
-      return;
-    }
-    for (var i = 0; i < distributedNodes.length; i++) {
-      Polymer.dom(node).removeChild(distributedNodes[i]);
-    }
   },
 
   /*
@@ -241,8 +248,10 @@ window.Basic.ContentHelpers = {
    * reprojected content. Additionally, if a component currently has content,
    * the contentChanged handler will be immediately invoked.
    *
-   * If the optional observeChanges parameter is false, this function will
-   * disconnect any existing observer.
+   * By default, this will invoke a handler on the element called
+   * "contentChanged". If the optional handler parameter is supplied, that
+   * handler will be invoked instead. If the handler parameter is null, this
+   * function will disconnect any existing observer.
    *
    * This method is typically invoked by a component's attached handler, and
    * the invoked with observeChanges = false in the detached handler.
@@ -254,19 +263,23 @@ window.Basic.ContentHelpers = {
    * correctly detect when nodes are only *removed* from it.
    *
    * @method observeContentChanges
+   * @param {Function} handler The function to invoke when content changes.
    */
-  observeContentChanges: function(node, observeChanges) {
-    if (observeChanges || observeChanges == null) {
+  observeContentChanges: function(node, handler) {
+    if (handler || typeof handler === 'undefined') {
       // Start observing
-      observeContentMutations(node, handleContentChanged.bind(node));
+      handler = (handler || node.contentChanged).bind(node);
+      node._contentChangeHandler = handler;
+      observeContentMutations(node, mutationObserved.bind(node));
       if (Polymer.dom(node).childNodes.length > 0) {
         // Consider any initial content of a new element to be "changed" content.
-        handleContentChanged.call(node);
+        handler();
       }
     } else if (node._contentChangeObserver) {
       // Stop observing
       node._contentChangeObserver.disconnect();
       node._contentChangeObserver = null;
+      node._contentChangeHandler = null;
     }
   }
 
