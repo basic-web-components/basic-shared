@@ -78,17 +78,10 @@ function mutationObserved(mutations) {
   var mutationsInLightDom = Polymer.Settings.useNativeShadow ||
     includesLightDomMutations(mutations, this);
 
-  if (!mutationsInLightDom) {
-    // Nothing to handle as a change in content.
-    return;
+  if (mutationsInLightDom) {
+    lightDomContentChanged(this);
   }
 
-  // See if the elements' new content includes a content element, in which case
-  // we'll need to monitor the component's host for changes, too.
-  observeHostIfContentElementPresent(this);
-
-  // Invoke the element's own handler.
-  this._contentChangeHandler();
 }
 
 
@@ -135,6 +128,24 @@ function isLightDomMutation(mutation, component) {
 }
 
 
+function lightDomContentChanged(node) {
+
+  // See if the elements' new content includes a content element, in which case
+  // we'll need to monitor the component's host for changes, too.
+  observeHostIfContentElementPresent(node);
+
+  // Invoke the element's own handler.
+  if (!node._contentChangeHandler) {
+    // TODO: Investigate how this condition can come about.
+    // It shouldn't happen, but does.
+    // debugger;
+  } else {
+    node._contentChangeHandler();
+  }
+
+}
+
+
 // Wire up an observer for (light DOM) content change events on the given
 // node.
 function observeContentMutations(node, handler) {
@@ -148,13 +159,19 @@ function observeContentMutations(node, handler) {
 }
 
 
-// If the indicated node contains a content element, the changes in the *host*
-// element's light DOM content will cause nodes to be redistributed to this
-// node. In order to notified of such content changes, we wire up a mutation
-// observed on the host. We also recursively call this function on the host: it
-// may very well contain a content element itself, meaning that we'll have to
-// observe content changes on *its* host, and so on...
-function observeHostIfContentElementPresent(node) {
+// If the indicated component has contains a content element, the changes in the
+// *host* element's light DOM content will cause nodes to be redistributed to
+// component.
+//
+// In order to notified of such content changes, we wire up a mutation
+// observed on the host.
+//
+// We also recursively call this function on the host: it may very well contain
+// a content element itself, meaning that we'll have to observe content changes
+// on *its* host, and so on. In that case, the node parameter indicates the
+// host we're considering in this call.
+function observeHostIfContentElementPresent(component, node) {
+  node = node || component;
   var contentElement = Polymer.dom(node).querySelector('content');
   if (contentElement) {
     // The element's new content contains at least one content element, so we
@@ -163,13 +180,30 @@ function observeHostIfContentElementPresent(node) {
     // outstanding observers of that old content.
     var host = Basic.ContentHelpers.getHost(node);
     if (host) {
+      node._contentHost = host;
       observeContentMutations(host, function() {
-        node._contentChangeHandler();
+        lightDomContentChanged(component);
       });
-      observeHostIfContentElementPresent(host);
+      observeHostIfContentElementPresent(component, host);
     }
   }
 }
+
+
+function stopObservingContentMutations(node) {
+  if (node._contentChangeObserver) {
+    // Stop observing
+    node._contentChangeObserver.disconnect();
+    node._contentChangeObserver = null;
+    node._contentChangeHandler = null;
+  }
+  if (node._contentHost) {
+    // Stop observing changes on host.
+    stopObservingContentMutations(node._contentHost);
+    node._contentHost = null;
+  }
+}
+
 
 window.Basic = window.Basic || {};
 
@@ -273,13 +307,10 @@ window.Basic.ContentHelpers = {
       observeContentMutations(node, mutationObserved.bind(node));
       if (Polymer.dom(node).childNodes.length > 0) {
         // Consider any initial content of a new element to be "changed" content.
-        handler();
+        lightDomContentChanged(node);
       }
-    } else if (node._contentChangeObserver) {
-      // Stop observing
-      node._contentChangeObserver.disconnect();
-      node._contentChangeObserver = null;
-      node._contentChangeHandler = null;
+    } else {
+      stopObservingContentMutations(node);
     }
   }
 
