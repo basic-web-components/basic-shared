@@ -113,6 +113,11 @@ function isLightDomDescendant(node, component) {
     // Walk up to see if the parent is in component's light DOM.
     return isLightDomDescendant(parent, component);
   } else {
+    // We've done one of the following:
+    // * walked up in to a shadow root
+    // * walked up out of the document
+    // In either case, the original node wasn't a light DOM child of the
+    // component.
     return false;
   }
 }
@@ -122,9 +127,16 @@ function isLightDomDescendant(node, component) {
 // (and not Shady DOM).
 function isLightDomMutation(mutation, component) {
   // See if at least one added node was in light DOM.
-  return Array.prototype.some.call(mutation.addedNodes, function(addedNode) {
+  var lightDomAddition = Array.prototype.some.call(mutation.addedNodes, function(addedNode) {
     return isLightDomDescendant(addedNode, component);
   });
+  if (lightDomAddition) {
+    return true;
+  }
+  var lightDomRemoval = Array.prototype.some.call(mutation.removedNodes, function(removedNode) {
+    return wasLightDomDescendant(removedNode, mutation.target, component);
+  });
+  return lightDomRemoval;
 }
 
 
@@ -203,6 +215,86 @@ function stopObservingContentMutations(node) {
     node._contentHost = null;
   }
 }
+
+
+// Return true if the given node *was* a child of the given container in the
+// component's Shady DOM. The container may be the component itself, or an
+// element somewhere in the component's simulated shadow tree.
+//
+// This work is pretty hard to do without more cooperation from Shady DOM. By
+// the time a removal mutation occurs, all internal Shady DOM state has been
+// scraped off the node. We do our best to try to guess whether the indicated
+// node was projected from light DOM into the container, or whether the node
+// was part of the shadow tree.
+function wasLightDomDescendant(node, container, component) {
+
+  if (container === component) {
+    // The node is (or was) a direct child of the component.
+    // This is an important but ambiguous case. In Shady DOM, we can't tell for
+    // sure after a removal whether the node was removed from the component's
+    // light DOM or simulated shadow DOM. As an approximation, we look at the
+    // node's classList for a hint.
+    return !wasNodeInShadowOfComponent(node, component);
+  }
+
+  if (isLightDomDescendant(container, component)) {
+    // The container was in the light DOM.
+    // REVIEW: What if the container is in the shadow of an element in the
+    // component's light DOM?
+    return true;
+  }
+
+  // The node must have been in the shadow tree somewhere
+  // Walk up the hierarchy from the point where the node was removed.
+  return wasNodeProjectedIntoContainer(node, container, component);
+}
+
+
+// Return true if the node appears to have been projected into the given
+// container within the component's shadow subtree.
+//
+// For a remove mutation to be in light DOM, the mutation target should be the
+// component itself, or a container within the component's composed shadow tree.
+// If the latter, the container should contain a content element, and the
+// container's host should either be the component, or an element that similarly
+// contains a content element is is hosted by the component (or... and so on).
+function wasNodeProjectedIntoContainer(node, container, component) {
+  var content = Polymer.dom(container).querySelector('content');
+  if (!content) {
+    // No content element, so node couldn't have been projected into container.
+    return false;
+  }
+  var containerHost = Basic.ContentHelpers.getHost(container);
+  if (!containerHost) {
+    // No host, so node couldn't have been projected into container.
+    return false;
+  }
+  if (wasNodeInShadowOfComponent(node, containerHost)) {
+    // Node was inside the container, but was actually put there by the
+    // container's host as part of that host's shadow.
+    return false;
+  }
+  return (containerHost === component) ?
+    true :
+    wasNodeProjectedIntoContainer(node, containerHost, component);
+}
+
+
+// Take a guess at whether the indicated node was in the shadow of the given
+// component. This relies on the fact that Shady DOM stamps a "style-scope"
+// CSS class onto elements in the simulated shadow, along with a CSS class name
+// matching the component's tag (localName). These CSS classes remain even after
+// a node has been removed from the document and all other Shady DOM residue has
+// been scraped away, so we can look at these classes as a heuristic.
+//
+// Because this function relies on CSS classes, it always returns false for text
+// nodes and other nodes that can't take classes.
+function wasNodeInShadowOfComponent(node, component) {
+  var classList = node.classList;
+  return classList &&
+    (classList.contains('style-scope') && classList.contains(component.localName));
+}
+
 
 
 window.Basic = window.Basic || {};
