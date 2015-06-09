@@ -27,23 +27,41 @@ window.Basic = window.Basic || {};
 
 Basic.Generic = {
 
-  properties: {
-    /**
-     * True if the component would like to receive generic styling.
-     *
-     * This property is true by default — set it to false to turn off all
-     * generic styles. This makes it easier to apply custom styling; you won't
-     * have to explicitly override styling you don't want.
-     *
-     * @property generic
-     * @type Boolean
-     * @default true
-     */
-    generic: {
-      type: Boolean,
-      value: true,
-      reflectToAttribute: true
+  /**
+   * True if the component would like to receive generic styling.
+   *
+   * This property is true by default — set it to false to turn off all
+   * generic styles. This makes it easier to apply custom styling; you won't
+   * have to explicitly override styling you don't want.
+   *
+   * @property generic
+   * @type Boolean
+   * @default true
+   */
+  get generic() {
+    return this._generic;
+  },
+  // We roll our own attribute setting so that an explicitly false value shows
+  // up as generic="false".
+  set generic(value) {
+    if (typeof value === 'string') {
+      value = (value !== 'false');
     }
+    this._generic = value;
+    if (value === false) {
+      // Explicitly use false string.
+      this.setAttribute('generic', 'false');
+    } else if (value == null) {
+      // Explicitly remove attribute.
+      this.removeAttribute('generic');
+    } else {
+      // Use the empty string to get attribute to appear with no value.
+      this.setAttribute('generic', '');
+    }
+  },
+
+  ready: function() {
+    this.generic = this.getAttribute('generic') || true;
   }
 
 };
